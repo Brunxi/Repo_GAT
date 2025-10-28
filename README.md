@@ -53,3 +53,4 @@ Los scripts en `scripts/` son plantillas SLURM que utilizan estos comandos.
 - Los modelos GAT/GCN/SAGE y los ataques adversarios FGM están en `gat_pipeline.models`.
 - Las representaciones ESM-2 se obtienen con `fair-esm` (contact head oficial), garantizando mapas de contacto reales.
 - Se usa `wandb` de forma opcional; definir `WANDB_API_KEY` antes de ejecutar para habilitarlo.
+# Repo_GAT
