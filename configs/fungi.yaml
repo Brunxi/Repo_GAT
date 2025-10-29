@@ -1,15 +1,15 @@
 # Configuración base para experimentos con hongos
 species: fungi
-root_path: ./data
+root_path: ../data
 trim_thresh: 1000
 n_splits: 5
 ratio: 0.2
 
 # Rutas de entrada
-pos_samples_path: ./data/fungi/orig_sample_list/Fungi_Essential_Genes.xlsx
-neg_samples_path: ./data/fungi/orig_sample_list/Fungi_NonEssential_Genes.xlsx
-kfold_root_path: ./data/fungi/kfold_splitted_data
-raw_data_path: ./data/fungi/raw
+pos_samples_path: ../data/fungi/orig_sample_list/Fungi_Essential_Genes.xlsx
+neg_samples_path: ../data/fungi/orig_sample_list/Fungi_NonEssential_Genes.xlsx
+kfold_root_path: ../data/fungi/kfold_splitted_data
+raw_data_path: ../data/fungi/raw
 
 # Entrenamiento
 train_batch_size: 6
@@ -18,7 +18,7 @@ num_epochs: 400
 lr: 2.0e-6
 weight_decay: 5.0e-4
 drop_prob: 0.3
-model_saving_path: ./experiments/fungi
+model_saving_path: ../experiments/fungi
 cuda_name: cuda:0
 model: gat
 wandb_project: fungi_pathogenesis_bingo_loss_desb_last

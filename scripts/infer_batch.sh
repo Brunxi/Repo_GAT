@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-if [[ $# -lt 3 ]]; then
+if [ $# -lt 3 ]; then
   echo "Usage: sbatch $0 FASTA_PATH CHECKPOINT_PATH OUTPUT_CSV [CONFIG_PATH]" >&2
   exit 1
 fi
@@ -25,11 +25,12 @@ PROJECT_ROOT="${PROJECT_ROOT:-$PWD}"
 module load pytorch/2.2.0
 mkdir -p "$PROJECT_ROOT/logs"
 
-pip install --user -e "$PROJECT_ROOT"
+python -m pip install --user -e "$PROJECT_ROOT"
+export PATH="$HOME/.local/bin:$PATH"
 
 cd "$PROJECT_ROOT"
 
-gat-pipeline infer-fasta \
+python -m gat_pipeline.cli infer-fasta \
   --config "$CONFIG_PATH" \
   --fasta "$FASTA_PATH" \
   --model-checkpoint "$CHECKPOINT" \

@@ -42,7 +42,21 @@ def _prepare_data(args: argparse.Namespace) -> None:
 
 
 def _train_fold(args: argparse.Namespace) -> None:
-    config = _load_config(args.config)
+    overrides = {}
+    if args.lr is not None:
+        overrides["lr"] = args.lr
+    if args.drop_prob is not None:
+        overrides["drop_prob"] = args.drop_prob
+    if args.weight_decay is not None:
+        overrides["weight_decay"] = args.weight_decay
+    if args.ratio is not None:
+        overrides["ratio"] = args.ratio
+    if args.train_batch_size is not None:
+        overrides["train_batch_size"] = args.train_batch_size
+    if args.test_batch_size is not None:
+        overrides["test_batch_size"] = args.test_batch_size
+
+    config = load_config(args.config, overrides if overrides else None)
     if args.model and args.model not in {"gat", "gcn", "sage"}:
         raise ValueError("Model must be one of: gat, gcn, sage")
     summary = train_fold(
@@ -50,6 +64,7 @@ def _train_fold(args: argparse.Namespace) -> None:
         fold=args.fold,
         model_name=args.model,
         use_wandb=False if args.no_wandb else None,
+        wandb_run_name=args.wandb_run_name,
     )
     payload = {
         "best_aupr_path": str(summary.best_aupr_path) if summary.best_aupr_path else None,
@@ -98,6 +113,7 @@ def _explain_nodes(args: argparse.Namespace) -> None:
     if ratio is None and config is not None:
         ratio = config.ratio
     ratio = ratio if ratio is not None else 0.2
+    drop_prob = config.drop_prob if config is not None else 0.3
     run_node_explainer(
         sequence=sequence,
         model_path=Path(args.model_checkpoint),
@@ -108,6 +124,7 @@ def _explain_nodes(args: argparse.Namespace) -> None:
         steps=args.steps,
         epochs=args.epochs,
         seed=args.seed,
+        drop_prob=drop_prob,
     )
 
 
@@ -130,6 +147,13 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--fold", type=int, required=True)
     train_parser.add_argument("--model", default=None)
     train_parser.add_argument("--no-wandb", action="store_true")
+    train_parser.add_argument("--lr", type=float, default=None)
+    train_parser.add_argument("--drop-prob", type=float, default=None)
+    train_parser.add_argument("--weight-decay", type=float, default=None)
+    train_parser.add_argument("--ratio", type=float, default=None)
+    train_parser.add_argument("--train-batch-size", type=int, default=None)
+    train_parser.add_argument("--test-batch-size", type=int, default=None)
+    train_parser.add_argument("--wandb-run-name", default=None)
     train_parser.set_defaults(func=_train_fold)
 
     single_parser = subparsers.add_parser("infer-sequence", help="Infer a single protein sequence")

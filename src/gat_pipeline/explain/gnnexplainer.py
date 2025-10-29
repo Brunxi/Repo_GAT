@@ -21,6 +21,7 @@ from torch_geometric.utils import subgraph
 
 from ..config import PipelineConfig, load_config
 from ..data.esm import embed_sequence, load_esm_model
+from ..inference.single import load_checkpoint_metadata
 from ..models import GATNet
 from ..utils import cmap_to_graph, ensure_dir
 
@@ -137,7 +138,7 @@ def _insertion_deletion_curves(
     return ks.tolist(), deletion_vals, insertion_vals, _auc(deletion_vals), _auc(insertion_vals)
 
 
-def _load_model(model_path: Path, device: torch.device) -> nn.Module:
+def _load_model(model_path: Path, device: torch.device, drop_prob: float) -> nn.Module:
     print(f"📥 Loading model from {model_path}")
     try:
         model_obj = torch.load(model_path, map_location=device)
@@ -154,7 +155,7 @@ def _load_model(model_path: Path, device: torch.device) -> nn.Module:
     state = torch.load(model_path, map_location=device)
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
-    model = GATNet(esm_embeds=1280, n_heads=2, drop_prob=0.3, n_output=1)
+    model = GATNet(esm_embeds=1280, n_heads=2, drop_prob=drop_prob, n_output=1)
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing or unexpected:
         print(f"⚠️ state_dict load warnings - missing: {missing}, unexpected: {unexpected}")
@@ -189,6 +190,8 @@ def run_node_explainer(
     epochs: Optional[int] = None,
     seed: int = 42,
     device: Optional[torch.device] = None,
+    drop_prob: float = 0.3,
+    fold_number: Optional[int] = None,
 ) -> ExplainerSummary:
     """Run the node-level GNNExplainer and persist artefacts to disk."""
 
@@ -196,7 +199,11 @@ def run_node_explainer(
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🔧 Device: {device}")
 
-    model = _load_model(model_path, device)
+    metadata = load_checkpoint_metadata(model_path)
+    ratio = metadata.get("ratio", ratio)
+    drop_prob = metadata.get("drop_prob", drop_prob)
+
+    model = _load_model(model_path, device, drop_prob=drop_prob)
     graph = _build_graph(sequence, output_name, ratio=ratio, device=device)
 
     with torch.no_grad():
@@ -275,8 +282,10 @@ def run_node_explainer(
             "sequence_length": len(sequence),
             "timestamp": datetime.now().isoformat(),
             "model_path": str(model_path),
-            "explainer": f\"GNNExplainer(node_mask_type=object, explanation_type=phenomenon, epochs={explainer_epochs})\",
+            "explainer": f"GNNExplainer(node_mask_type=object, explanation_type=phenomenon, epochs={explainer_epochs})",
             "ratio_contact_map": ratio,
+            "drop_prob": drop_prob,
+            "fold": fold_number,
             "edges_duplicated": False,
             "topk_nodes": int(top_k),
             "seed": seed,

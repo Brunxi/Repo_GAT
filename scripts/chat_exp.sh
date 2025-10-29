@@ -11,34 +11,61 @@
 
 set -euo pipefail
 
-if [[ $# -lt 3 ]]; then
-  echo "Usage: sbatch $0 \"SEQUENCE\" MODEL_CHECKPOINT OUTPUT_NAME [CONFIG_PATH]" >&2
+if [ $# -lt 3 ]; then
+  echo "Usage: sbatch $0 \"SEQUENCE\" OUTPUT_NAME FOLD [CONFIG_PATH]" >&2
   exit 1
 fi
 
-SEQUENCE="$1"
-MODEL_PATH="$2"
-OUTPUT_NAME="$3"
-CONFIG_PATH="${4:-}"
-
+SEQUENCE_INPUT="$1"
+OUTPUT_NAME="$2"
+FOLD_NUMBER="$3"
+CONFIG_PATH="${4:-configs/fungi.yaml}"
 PROJECT_ROOT="${PROJECT_ROOT:-$PWD}"
+
+# Allow overriding checkpoint via env, otherwise use best_loss from fold
+MODEL_PATH="${MODEL_PATH:-$PROJECT_ROOT/experiments/fungi/gat/fold_${FOLD_NUMBER}/best_loss.pt}"
+
+if [ ! -f "$MODEL_PATH" ]; then
+  echo "Checkpoint not found: $MODEL_PATH" >&2
+  exit 1
+fi
+
 module load pytorch/2.2.0
 mkdir -p "$PROJECT_ROOT/logs"
 
-pip install --user -e "$PROJECT_ROOT"
+python -m pip install --user -e "$PROJECT_ROOT"
+export PATH="$HOME/.local/bin:$PATH"
 
 cd "$PROJECT_ROOT"
 
-CMD=(
-  gat-pipeline explain-nodes
-  --sequence "$SEQUENCE"
-  --name "$OUTPUT_NAME"
-  --model-checkpoint "$MODEL_PATH"
-  --output-dir "gnn_results"
+export SEQUENCE_INPUT
+export OUTPUT_NAME
+export MODEL_PATH
+export FOLD_NUMBER
+export CONFIG_PATH
+
+python - <<'PY'
+from pathlib import Path
+import os
+
+from gat_pipeline.config import load_config
+from gat_pipeline.explain.gnnexplainer import run_node_explainer
+
+sequence = os.environ["SEQUENCE_INPUT"]
+name = os.environ["OUTPUT_NAME"]
+model_path = Path(os.environ["MODEL_PATH"])
+fold = int(os.environ["FOLD_NUMBER"])
+config_path = os.environ["CONFIG_PATH"]
+
+config = load_config(config_path)
+output_dir = Path("gnn_results")
+
+run_node_explainer(
+    sequence=sequence,
+    model_path=model_path,
+    output_name=name,
+    output_dir=output_dir,
+    ratio=config.ratio,
+    fold_number=fold,
 )
-
-if [[ -n "$CONFIG_PATH" ]]; then
-  CMD+=(--config "$CONFIG_PATH")
-fi
-
-"${CMD[@]}"
+PY

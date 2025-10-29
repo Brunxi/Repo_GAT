@@ -53,4 +53,65 @@ Los scripts en `scripts/` son plantillas SLURM que utilizan estos comandos.
 - Los modelos GAT/GCN/SAGE y los ataques adversarios FGM están en `gat_pipeline.models`.
 - Las representaciones ESM-2 se obtienen con `fair-esm` (contact head oficial), garantizando mapas de contacto reales.
 - Se usa `wandb` de forma opcional; definir `WANDB_API_KEY` antes de ejecutar para habilitarlo.
-# Repo_GAT
+
+## Flujo completo (de FASTA a explicaciones)
+
+1. **Instalar el paquete (una vez)**
+
+   ```bash
+   cd ~/Repo_GAT
+   python -m pip install --user -e .
+   ```
+
+2. **Preparar los datos** (gene list, embeddings, splits y grafos):
+
+   ```bash
+   PATHO_FASTA=/ruta/PAT.fasta \
+   NON_PATHO_FASTA=/ruta/NOPAT.fasta \
+   sbatch scripts/prepare_data.sh
+   ```
+
+3. **Entrenar** con tus hiperparámetros (ajusta `configs/fungi.yaml` o exporta variables antes del `sbatch`):
+
+   ```bash
+   WANDB_API_KEY="tu_token" sbatch scripts/run_training.sh
+   ```
+
+4. **Inferencia para una secuencia** (usa el fold cuyo checkpoint quieras):
+
+   ```bash
+   SEQ=$(awk -F'\t' '$2=="pectate_liase_bcin"{print $3}' data/fungi/orig_sample_list/gene_list.txt)
+
+   sbatch scripts/infer_single.sh \
+     "$SEQ" \
+     pectate_liase_bcin \
+     0 \
+     configs/fungi.yaml
+   ```
+
+5. **Explicabilidad con GNNExplainer** (mismo fold y secuencia):
+
+   ```bash
+   sbatch scripts/chat_exp.sh \
+     "$SEQ" \
+     pectate_liase_bcin \
+     0 \
+     configs/fungi.yaml
+   ```
+
+6. **(Opcional) Búsqueda de hiperparámetros**
+
+   Grid sweep:
+
+   ```bash
+   WANDB_API_KEY=... sbatch scripts/run_hparam_sweep.sh
+   ```
+
+   Optuna (búsqueda bayesiana):
+
+   ```bash
+   python -m pip install --user -e .[hpo]
+   WANDB_API_KEY=... sbatch scripts/run_hparam_optuna.sh
+   ```
+
+Cada entrenamiento genera la metadata del checkpoint (`*.meta.json`), de modo que inferencia y explicaciones usan siempre los parámetros reales (dropout, ratio, etc.).

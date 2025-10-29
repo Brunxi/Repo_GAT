@@ -10,16 +10,6 @@ from torch_geometric.data import Data, InMemoryDataset
 from ..config import PipelineConfig
 from ..utils import cmap_to_graph, load_pt
 
-SAFE_GLOBALS = []
-try:  # pragma: no cover - depends on torch-geometric version
-    from torch_geometric.data.data import DataEdgeAttr, DataTensorAttr, DataNodeAttr
-    from torch_geometric.data.storage import EdgeStorage, GlobalStorage, NodeStorage
-    from torch_geometric.data.batch import Batch
-
-    SAFE_GLOBALS = [DataEdgeAttr, DataTensorAttr, DataNodeAttr, NodeStorage, EdgeStorage, GlobalStorage, Batch]
-except Exception:  # pragma: no cover - compatibility fallback
-    pass
-
 
 class ProteinGraphDataset(InMemoryDataset):
     def __init__(
@@ -31,12 +21,13 @@ class ProteinGraphDataset(InMemoryDataset):
         raw_data_path: Path,
         transform=None,
         pre_transform=None,
+        pre_filter=None,
     ) -> None:
         self.mode = mode
         self.gene_list = gene_list
         self.ratio = ratio
         self.raw_data_path = Path(raw_data_path)
-        super().__init__(root, transform, pre_transform)
+        super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = self._load_processed()
 
     @property
@@ -46,11 +37,9 @@ class ProteinGraphDataset(InMemoryDataset):
     def _load_processed(self):
         processed_path = Path(self.processed_paths[0])
         if processed_path.exists():
-            with torch.serialization.safe_globals(SAFE_GLOBALS):
-                return torch.load(processed_path)
+            return torch.load(processed_path, map_location="cpu")
         self.process()
-        with torch.serialization.safe_globals(SAFE_GLOBALS):
-            return torch.load(processed_path)
+        return torch.load(processed_path, map_location="cpu")
 
     def process(self):  # type: ignore[override]
         data_list: List[Data] = []

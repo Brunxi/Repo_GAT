@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -27,6 +28,24 @@ class TrainSummary:
     best_aupr_path: Optional[Path]
     best_loss_path: Optional[Path]
     history: Dict[str, Any]
+
+
+def _save_checkpoint(model: torch.nn.Module, path: Path, config: PipelineConfig, fold: int, model_name: str) -> None:
+    torch.save(model.state_dict(), path)
+    metadata = {
+        "model": model_name,
+        "fold": fold,
+        "drop_prob": config.drop_prob,
+        "ratio": config.ratio,
+        "lr": config.lr,
+        "weight_decay": config.weight_decay,
+        "train_batch_size": config.train_batch_size,
+        "test_batch_size": config.test_batch_size,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    meta_path = path.with_name(path.name + ".meta.json")
+    with meta_path.open("w", encoding="utf-8") as fh:
+        json.dump(metadata, fh, indent=2)
 
 
 def _make_model(model_name: str, drop_prob: float, n_output: int) -> tuple[torch.nn.Module, Any]:
@@ -135,6 +154,7 @@ def train_fold(
     fold: int,
     model_name: Optional[str] = None,
     use_wandb: Optional[bool] = None,
+    wandb_run_name: Optional[str] = None,
 ) -> TrainSummary:
     """Run adversarial training for a specific fold."""
 
@@ -188,10 +208,11 @@ def train_fold(
     if run_wandb and wandb is not None:
         wandb_config = config.to_dict()
         wandb_config.update({"fold": fold, "model": model_name})
+        run_name = wandb_run_name or f"{config.wandb_run_prefix}_{model_name}_fold_{fold}"
         wandb_run = wandb.init(
             project=config.wandb_project,
             entity=config.wandb_entity,
-            name=f"{config.wandb_run_prefix}_{model_name}_fold_{fold}",
+            name=run_name,
             config=wandb_config,
         )
 
@@ -247,11 +268,11 @@ def train_fold(
         val_aupr = val_metrics[7]
         if val_aupr > best_val_aupr:
             best_val_aupr = val_aupr
-            torch.save(model.state_dict(), best_aupr_path)
+            _save_checkpoint(model, best_aupr_path, config, fold, model_name)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), best_loss_path)
+            _save_checkpoint(model, best_loss_path, config, fold, model_name)
 
     best_aupr_model = _load_model(model_name, best_aupr_path, config.drop_prob).to(device)
     best_loss_model = _load_model(model_name, best_loss_path, config.drop_prob).to(device)

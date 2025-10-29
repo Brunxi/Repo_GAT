@@ -16,7 +16,7 @@ CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/configs/fungi.yaml}"
 PATHO_FASTA="${PATHO_FASTA:-}"
 NON_PATHO_FASTA="${NON_PATHO_FASTA:-}"
 
-if [[ -z "$PATHO_FASTA" || -z "$NON_PATHO_FASTA" ]]; then
+if [ -z "$PATHO_FASTA" ] || [ -z "$NON_PATHO_FASTA" ]; then
   echo "Set PATHO_FASTA and NON_PATHO_FASTA environment variables before submitting." >&2
   exit 1
 fi
@@ -24,11 +24,12 @@ fi
 module load pytorch/2.2.0
 mkdir -p "$PROJECT_ROOT/logs"
 
-pip install --user -e "$PROJECT_ROOT"
+python -m pip install --user -e "$PROJECT_ROOT"
+export PATH="$HOME/.local/bin:$PATH"
 
 cd "$PROJECT_ROOT"
 
-gat-pipeline prepare-data \
+python -m gat_pipeline.cli prepare-data \
   --config "$CONFIG_PATH" \
   --pathogenesis-fasta "$PATHO_FASTA" \
   --non-pathogenesis-fasta "$NON_PATHO_FASTA"

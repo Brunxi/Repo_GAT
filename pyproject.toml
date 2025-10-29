@@ -30,6 +30,9 @@ dev = [
   "ruff>=0.6",
   "pytest>=7.0"
 ]
+hpo = [
+  "optuna>=3.5"
+]
 
 [project.scripts]
 gat-pipeline = "gat_pipeline.cli:main"
