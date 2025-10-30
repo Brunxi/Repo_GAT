@@ -63,13 +63,15 @@ Los scripts en `scripts/` son plantillas SLURM que utilizan estos comandos.
    python -m pip install --user -e .
    ```
 
-2. **Preparar los datos** (gene list, embeddings, splits y grafos):
+2. **Preparar los datos** (gene list, embeddings, splits y grafos). Ejemplo con el pipeline base (ESM-2):
 
    ```bash
    PATHO_FASTA=/ruta/PAT.fasta \
    NON_PATHO_FASTA=/ruta/NOPAT.fasta \
    sbatch scripts/prepare_data.sh
    ```
+
+   > Para la variante de ablación con ESM-1b usa `scripts/prepare_data_fungi2.sh` y `configs/fungi2.yaml`.
 
 3. **Entrenar** con tus hiperparámetros (ajusta `configs/fungi.yaml` o exporta variables antes del `sbatch`):
 

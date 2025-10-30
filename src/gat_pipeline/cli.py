@@ -125,6 +125,8 @@ def _explain_nodes(args: argparse.Namespace) -> None:
         epochs=args.epochs,
         seed=args.seed,
         drop_prob=drop_prob,
+        esm_model_embeddings=config.esm_model_embeddings if config else "facebook/esm2_t33_650M_UR50D",
+        esm_model_contacts=config.esm_model_contacts if config else "facebook/esm2_t33_650M_UR50D",
     )
 
 

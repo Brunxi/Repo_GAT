@@ -6,16 +6,39 @@ from typing import Iterable, Iterator, Tuple
 import torch
 
 
-@lru_cache(maxsize=1)
-def load_esm_model() -> Tuple[torch.nn.Module, callable]:
-    """Load ESM-2 from fair-esm using the native contact-head outputs."""
+@lru_cache(maxsize=4)
+def load_esm_model(model_name: str = "facebook/esm2_t33_650M_UR50D") -> Tuple[torch.nn.Module, callable]:
+    """Load an ESM model from fair-esm using the native contact-head outputs."""
 
     import os
 
     os.environ.setdefault("APEX_DISABLED", "1")
     import esm  # type: ignore
 
-    model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
+    short_name = model_name.split("/")[-1]
+    candidates = [short_name]
+
+    alias_map = {
+        "esm2_t33_650M_UR50S_2": "esm2_t33_650M_UR50S",
+        "esm2_t33_650M_UR50D_2": "esm2_t33_650M_UR50D",
+    }
+    if short_name in alias_map:
+        candidates.append(alias_map[short_name])
+
+    base, _, suffix = short_name.rpartition("_")
+    if suffix.isdigit():
+        candidates.append(base)
+
+    loader = None
+    for candidate in candidates:
+        loader = getattr(esm.pretrained, candidate, None)
+        if loader is not None:
+            break
+
+    if loader is None:
+        raise ValueError(f"Unsupported ESM model '{model_name}'")
+
+    model, alphabet = loader()
     batch_converter = alphabet.get_batch_converter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)

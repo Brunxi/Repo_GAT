@@ -12,15 +12,18 @@ kfold_root_path: ../data/fungi/kfold_splitted_data
 raw_data_path: ../data/fungi/raw
 
 # Entrenamiento
-train_batch_size: 6
-test_batch_size: 5
+train_batch_size: 5
+test_batch_size: 4
 num_epochs: 400
-lr: 2.0e-6
+lr: 1.0e-6
 weight_decay: 5.0e-4
 drop_prob: 0.3
 model_saving_path: ../experiments/fungi
 cuda_name: cuda:0
 model: gat
+esm_model_embeddings: facebook/esm2_t33_650M_UR50D
+esm_model_contacts: facebook/esm2_t33_650M_UR50D
+use_fgm: false
 wandb_project: fungi_pathogenesis_bingo_loss_desb_last
 wandb_entity: null
 wandb_run_prefix: fungi

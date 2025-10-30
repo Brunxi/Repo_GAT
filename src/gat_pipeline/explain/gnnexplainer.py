@@ -164,10 +164,19 @@ def _load_model(model_path: Path, device: torch.device, drop_prob: float) -> nn.
     return model
 
 
-def _build_graph(sequence: str, sequence_id: str, ratio: float, device: torch.device) -> Data:
-    model_bundle = load_esm_model()
-    _, representations, contact_map = embed_sequence(sequence_id, sequence, model_bundle)
-    node_features, edge_index = cmap_to_graph(representations, contact_map, ratio=ratio)
+def _build_graph(
+    sequence: str,
+    sequence_id: str,
+    ratio: float,
+    device: torch.device,
+    esm_model_embeddings: str,
+    esm_model_contacts: str,
+) -> Data:
+    emb_bundle = load_esm_model(esm_model_embeddings)
+    _, representations, _ = embed_sequence(sequence_id, sequence, emb_bundle)
+    contact_bundle = load_esm_model(esm_model_contacts)
+    _, _, contact_map = embed_sequence(sequence_id, sequence, contact_bundle)
+    node_features, edge_index, node_index_map, seq_length = cmap_to_graph(representations, contact_map, ratio=ratio)
     x = torch.as_tensor(node_features, dtype=torch.float32)
     if edge_index.size == 0:
         edge_tensor = torch.empty((2, 0), dtype=torch.long)
@@ -175,7 +184,11 @@ def _build_graph(sequence: str, sequence_id: str, ratio: float, device: torch.de
         edge_tensor = torch.as_tensor(edge_index, dtype=torch.long)
     data = Data(x=x, edge_index=edge_tensor)
     data.batch = torch.zeros(data.x.size(0), dtype=torch.long)
-    print(f"✅ Graph built: {data.x.size(0)} nodes, {data.edge_index.size(1)} edges")
+    data.node_index_map = torch.as_tensor(node_index_map, dtype=torch.long)
+    data.sequence_length = torch.tensor(seq_length, dtype=torch.long)
+    print(
+        f"✅ Graph built: {data.x.size(0)} nodes (mapped from {seq_length}), {data.edge_index.size(1)} edges"
+    )
     return data.to(device)
 
 
@@ -192,6 +205,8 @@ def run_node_explainer(
     device: Optional[torch.device] = None,
     drop_prob: float = 0.3,
     fold_number: Optional[int] = None,
+    esm_model_embeddings: Optional[str] = None,
+    esm_model_contacts: Optional[str] = None,
 ) -> ExplainerSummary:
     """Run the node-level GNNExplainer and persist artefacts to disk."""
 
@@ -202,9 +217,21 @@ def run_node_explainer(
     metadata = load_checkpoint_metadata(model_path)
     ratio = metadata.get("ratio", ratio)
     drop_prob = metadata.get("drop_prob", drop_prob)
+    esm_model_embeddings = metadata.get("esm_model_embeddings", esm_model_embeddings or "facebook/esm2_t33_650M_UR50D")
+    esm_model_contacts = metadata.get("esm_model_contacts", esm_model_contacts or "facebook/esm2_t33_650M_UR50D")
 
     model = _load_model(model_path, device, drop_prob=drop_prob)
-    graph = _build_graph(sequence, output_name, ratio=ratio, device=device)
+    graph = _build_graph(
+        sequence,
+        output_name,
+        ratio=ratio,
+        device=device,
+        esm_model_embeddings=esm_model_embeddings,
+        esm_model_contacts=esm_model_contacts,
+    )
+    node_index_map = graph.node_index_map.detach().cpu().numpy()
+    sequence_length = int(graph.sequence_length.item())
+    sequence_slice = sequence[:sequence_length]
 
     with torch.no_grad():
         base_logits = model(graph)
@@ -236,6 +263,10 @@ def run_node_explainer(
     if node_mask.ndim == 2 and node_mask.shape[1] == 1:
         node_mask = node_mask.squeeze(1)
     print(f"✅ Node mask computed: shape={node_mask.shape}, min={node_mask.min():.6f}, max={node_mask.max():.6f}")
+
+    full_node_mask = np.zeros(sequence_length, dtype=float)
+    if node_index_map.size > 0:
+        full_node_mask[node_index_map] = node_mask
 
     order = np.argsort(node_mask)[::-1].copy()
     top_k = max(1, int(top_fraction * len(node_mask)))
@@ -276,15 +307,20 @@ def run_node_explainer(
     ensure_dir(output_dir / output_name)
     target_dir = (output_dir / output_name).resolve()
 
+    original_sequence_length = len(sequence)
+
     summary_dict = {
         "metadata": {
             "protein_name": output_name,
-            "sequence_length": len(sequence),
+            "sequence_length": original_sequence_length,
+            "sequence_graph_length": sequence_length,
             "timestamp": datetime.now().isoformat(),
             "model_path": str(model_path),
             "explainer": f"GNNExplainer(node_mask_type=object, explanation_type=phenomenon, epochs={explainer_epochs})",
             "ratio_contact_map": ratio,
             "drop_prob": drop_prob,
+            "esm_model_embeddings": esm_model_embeddings,
+            "esm_model_contacts": esm_model_contacts,
             "fold": fold_number,
             "edges_duplicated": False,
             "topk_nodes": int(top_k),
@@ -325,8 +361,8 @@ def run_node_explainer(
         "top_nodes": [
             {
                 "rank": i + 1,
-                "position": int(idx + 1),
-                "amino_acid": sequence[idx] if idx < len(sequence) else "X",
+                "position": int(node_index_map[idx] + 1) if node_index_map.size > 0 else int(idx + 1),
+                "amino_acid": sequence_slice[node_index_map[idx]] if node_index_map.size > 0 and node_index_map[idx] < len(sequence_slice) else "X",
                 "importance": float(node_mask[idx]),
             }
             for i, idx in enumerate(top_indices)
@@ -337,31 +373,34 @@ def run_node_explainer(
     with summary_path.open("w", encoding="utf-8") as fh:
         json.dump(summary_dict, fh, indent=2)
 
+    positions = np.arange(1, sequence_length + 1)
+    amino_acids = [sequence_slice[i] if i < len(sequence_slice) else "X" for i in range(sequence_length)]
     df = pd.DataFrame(
         {
-            "position": np.arange(1, len(node_mask) + 1),
-            "amino_acid": [sequence[i] if i < len(sequence) else "X" for i in range(len(node_mask))],
-            "node_importance": node_mask,
+            "position": positions,
+            "amino_acid": amino_acids,
+            "node_importance": full_node_mask,
         }
     )
     csv_path = target_dir / f"{output_name}_nodes_importance.csv"
     df.to_csv(csv_path, index=False)
 
     try:
-        x_vals = np.arange(len(node_mask))
+        x_vals = positions
         order_full = np.argsort(node_mask)[::-1].copy()
         top20_idx = order_full[: min(20, len(node_mask))]
         top20_vals = node_mask[top20_idx]
+        top20_positions = node_index_map[top20_idx] if node_index_map.size > 0 else top20_idx
 
         fig, axes = plt.subplots(2, 1, figsize=(14, 10))
-        axes[0].plot(x_vals, node_mask)
+        axes[0].plot(positions, full_node_mask)
         axes[0].set_xlabel("Residue position")
         axes[0].set_ylabel("Node importance")
         axes[0].set_title(f"Node importance profile – {output_name}")
         axes[1].bar(range(len(top20_vals)), top20_vals)
-        for i, (idx, val) in enumerate(zip(top20_idx, top20_vals)):
-            aa = sequence[idx] if idx < len(sequence) else "X"
-            axes[1].text(i, val, f"{aa}{idx + 1}", ha="center", va="bottom", fontsize=8, rotation=90)
+        for i, (idx, val, pos) in enumerate(zip(top20_idx, top20_vals, top20_positions)):
+            aa = sequence_slice[pos] if pos < len(sequence_slice) else "X"
+            axes[1].text(i, val, f"{aa}{pos + 1}", ha="center", va="bottom", fontsize=8, rotation=90)
         plt.tight_layout()
         plt.savefig(target_dir / f"{output_name}_nodes_explainer.png", dpi=300, bbox_inches="tight", facecolor="white")
         plt.close(fig)

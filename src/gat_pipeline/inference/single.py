@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -66,16 +66,26 @@ def _aggregate_node_attention(
     return (scores / counts).cpu()
 
 
-def _build_graph(sequence_id: str, sequence: str, ratio: float):
-    model_bundle = load_esm_model()
-    _, features, contact_map = embed_sequence(sequence_id, sequence, model_bundle)
-    node_features, edge_index = cmap_to_graph(features, contact_map, ratio=ratio)
+def _build_graph(
+    sequence_id: str,
+    sequence: str,
+    ratio: float,
+    esm_model_embeddings: str,
+    esm_model_contacts: str,
+):
+    emb_bundle = load_esm_model(esm_model_embeddings)
+    _, features, _ = embed_sequence(sequence_id, sequence, emb_bundle)
+    contact_bundle = load_esm_model(esm_model_contacts)
+    _, _, contact_map = embed_sequence(sequence_id, sequence, contact_bundle)
+    node_features, edge_index, node_index_map, seq_length = cmap_to_graph(features, contact_map, ratio=ratio)
     graph_data = Data(
         x=torch.as_tensor(node_features, dtype=torch.float32),
         edge_index=torch.as_tensor(edge_index, dtype=torch.long),
         y=torch.tensor([0.0], dtype=torch.float32),
     )
     graph_data.batch = torch.zeros(graph_data.num_nodes, dtype=torch.long)
+    graph_data.node_index_map = torch.as_tensor(node_index_map, dtype=torch.long)
+    graph_data.sequence_length = torch.tensor(seq_length, dtype=torch.long)
     return graph_data
 
 
@@ -108,14 +118,23 @@ def run_inference_with_outputs(
     metadata = load_checkpoint_metadata(checkpoint_path)
     ratio = metadata.get("ratio", config.ratio)
     drop_prob = metadata.get("drop_prob", config.drop_prob)
+    esm_model_embeddings = metadata.get("esm_model_embeddings", config.esm_model_embeddings)
+    esm_model_contacts = metadata.get("esm_model_contacts", config.esm_model_contacts)
 
-    graph = _build_graph(sequence_id, sequence, ratio)
+    graph = _build_graph(sequence_id, sequence, ratio, esm_model_embeddings, esm_model_contacts)
     loader = DataLoader([graph], batch_size=1, shuffle=False)
 
     model = load_gat_model(checkpoint_path, drop_prob, device)
     model_wrapper = GATNetWithAttention(model)
 
     batch = next(iter(loader)).to(device)
+    sequence_length_tensor = batch.sequence_length
+    if isinstance(sequence_length_tensor, torch.Tensor):
+        sequence_length = int(sequence_length_tensor.view(-1)[0].item())
+    else:
+        sequence_length = int(sequence_length_tensor)
+    node_index_map = batch.node_index_map if hasattr(batch, "node_index_map") else None
+
     with torch.no_grad():
         logits, att1, att2 = model_wrapper.forward_with_attention(batch)
         probability = torch.sigmoid(logits).view(-1)[0].item()
@@ -124,17 +143,27 @@ def run_inference_with_outputs(
     edge_index1, weights1 = att1
     edge_index2, weights2 = att2
     num_nodes = batch.num_nodes
-    att_layer1 = _aggregate_node_attention(edge_index1.cpu(), weights1.cpu(), num_nodes)
-    att_layer2 = _aggregate_node_attention(edge_index2.cpu(), weights2.cpu(), num_nodes)
-    total_attention = att_layer1 + att_layer2
+    att_layer1 = _aggregate_node_attention(edge_index1.cpu(), weights1.cpu(), num_nodes).numpy()
+    att_layer2 = _aggregate_node_attention(edge_index2.cpu(), weights2.cpu(), num_nodes).numpy()
+
+    full_layer1 = np.zeros(sequence_length, dtype=np.float32)
+    full_layer2 = np.zeros(sequence_length, dtype=np.float32)
+    if node_index_map is not None and node_index_map.numel() > 0:
+        original_indices = node_index_map.detach().cpu().numpy()
+        full_layer1[original_indices] = att_layer1
+        full_layer2[original_indices] = att_layer2
+    total_attention = full_layer1 + full_layer2
+
+    sequence_slice = list(sequence[:sequence_length])
+    positions = np.arange(1, sequence_length + 1)
 
     residue_df = pd.DataFrame(
         {
-            "position": range(1, num_nodes + 1),
-            "amino_acid": list(sequence[:num_nodes]),
-            "attention_layer1": att_layer1.numpy(),
-            "attention_layer2": att_layer2.numpy(),
-            "total_attention": total_attention.numpy(),
+            "position": positions,
+            "amino_acid": sequence_slice,
+            "attention_layer1": full_layer1,
+            "attention_layer2": full_layer2,
+            "total_attention": total_attention,
         }
     )
 
@@ -144,10 +173,13 @@ def run_inference_with_outputs(
     summary = {
         "protein_name": sequence_id,
         "sequence_length": len(sequence),
+        "sequence_graph_length": sequence_length,
         "fold": fold_number,
         "checkpoint": str(checkpoint_path),
         "ratio": ratio,
         "drop_prob": drop_prob,
+        "esm_model_embeddings": esm_model_embeddings,
+        "esm_model_contacts": esm_model_contacts,
         "probability": float(probability),
         "prediction": prediction,
     }
@@ -180,8 +212,10 @@ def infer_sequence(
     metadata = load_checkpoint_metadata(checkpoint_path)
     ratio = metadata.get("ratio", config.ratio)
     drop_prob = metadata.get("drop_prob", config.drop_prob)
+    esm_model_embeddings = metadata.get("esm_model_embeddings", config.esm_model_embeddings)
+    esm_model_contacts = metadata.get("esm_model_contacts", config.esm_model_contacts)
 
-    graph = _build_graph(sequence_id, sequence, ratio)
+    graph = _build_graph(sequence_id, sequence, ratio, esm_model_embeddings, esm_model_contacts)
     loader = DataLoader([graph], batch_size=1, shuffle=False)
 
     model = load_gat_model(checkpoint_path, drop_prob, device)
@@ -190,7 +224,7 @@ def infer_sequence(
     with torch.no_grad():
         batch = next(iter(loader)).to(device)
         logits, *_ = model_wrapper.forward_with_attention(batch)
-        probability = torch.sigmoid(logits).cpu().numpy().flatten()[0]
+        probability = torch.sigmoid(logits).view(-1)[0].item()
         prediction = int(probability >= 0.5)
 
     return InferenceResult(

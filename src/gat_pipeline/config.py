@@ -32,6 +32,9 @@ class PipelineConfig:
     model: str = "gat"
     model_saving_path: Path = Path("./experiments/fungi")
     cuda_name: str = "cuda:0"
+    esm_model_embeddings: str = "facebook/esm2_t33_650M_UR50D"
+    esm_model_contacts: str = "facebook/esm2_t33_650M_UR50D"
+    use_fgm: bool = True
 
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None

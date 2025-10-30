@@ -67,5 +67,8 @@ run_node_explainer(
     output_dir=output_dir,
     ratio=config.ratio,
     fold_number=fold,
+    drop_prob=config.drop_prob,
+    esm_model_embeddings=config.esm_model_embeddings,
+    esm_model_contacts=config.esm_model_contacts,
 )
 PY

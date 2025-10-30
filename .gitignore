@@ -1,0 +1,23 @@
+# Datos y artefactos
+data/
+experiments/
+gnn_results/
+inference_results/
+logs/
+wandb/
+
+# Build/packaging
+*.egg-info/
+src/repo_gat.egg-info/
+
+# Pesados de ML
+*.pt
+*.pth
+*.ckpt
+
+# Varios
+*.log
+*.tmp
+*.out
+*.err
+.DS_Store

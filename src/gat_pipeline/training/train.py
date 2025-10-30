@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ try:  # Optional dependency management
 except ImportError:  # pragma: no cover - optional integration
     wandb = None  # type: ignore
 
+LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class TrainSummary:
@@ -30,17 +32,27 @@ class TrainSummary:
     history: Dict[str, Any]
 
 
-def _save_checkpoint(model: torch.nn.Module, path: Path, config: PipelineConfig, fold: int, model_name: str) -> None:
+def _save_checkpoint(
+    model: torch.nn.Module,
+    path: Path,
+    config: PipelineConfig,
+    fold: int,
+    model_name: str,
+    use_fgm: bool,
+) -> None:
     torch.save(model.state_dict(), path)
     metadata = {
         "model": model_name,
         "fold": fold,
         "drop_prob": config.drop_prob,
+        "use_fgm": use_fgm,
         "ratio": config.ratio,
         "lr": config.lr,
         "weight_decay": config.weight_decay,
         "train_batch_size": config.train_batch_size,
         "test_batch_size": config.test_batch_size,
+        "esm_model_embeddings": config.esm_model_embeddings,
+        "esm_model_contacts": config.esm_model_contacts,
         "timestamp": datetime.utcnow().isoformat(),
     }
     meta_path = path.with_name(path.name + ".meta.json")
@@ -63,35 +75,65 @@ def _make_model(model_name: str, drop_prob: float, n_output: int) -> tuple[torch
     return model, fgm
 
 
-def _adversarial_training(model, loader, device, optimizer, loss_fn, fgm_model):
+def _is_oom_error(err: RuntimeError) -> bool:
+    message = str(err).lower()
+    return "out of memory" in message or "cuda error: an illegal memory access" in message
+
+
+def _adversarial_training(model, loader, device, optimizer, loss_fn, fgm_model, enable_adversarial=True):
     model.train()
     epoch_loss = 0.0
     epoch_loss_adv = 0.0
     train_num = 0
     preds = []
     labels = []
+    scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
 
     for batch in loader:
         batch = batch.to(device)
         batch_y = batch.y.view(-1).float()
         optimizer.zero_grad()
 
-        out = model(batch).view(-1)
-        loss = loss_fn(out, batch_y)
-        loss.backward()
+        with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+            out = model(batch).view(-1)
+            loss = loss_fn(out, batch_y)
 
-        fgm_model.attack()
-        out_adv = model(batch).view(-1)
-        loss_adv = loss_fn(out_adv, batch_y)
-        loss_adv.backward()
-        fgm_model.restore()
+        try:
+            scaler.scale(loss).backward()
+        except RuntimeError as err:
+            if _is_oom_error(err):
+                torch.cuda.empty_cache()
+                optimizer.zero_grad(set_to_none=True)
+                enable_adversarial = False
+                LOGGER.warning(
+                    "Detected CUDA OOM during backward pass; retrying step without adversarial perturbation and enabling mixed precision fallback."
+                )
+                with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+                    out = model(batch).view(-1)
+                    loss = loss_fn(out, batch_y)
+                scaler.scale(loss).backward()
+            else:
+                raise
 
-        optimizer.step()
+        loss_adv_value = 0.0
+        if enable_adversarial and fgm_model is not None:
+            if scaler.is_enabled():
+                scaler.unscale_(optimizer)
+            fgm_model.attack()
+            with torch.cuda.amp.autocast(enabled=scaler.is_enabled()):
+                out_adv = model(batch).view(-1)
+                loss_adv = loss_fn(out_adv, batch_y)
+            scaler.scale(loss_adv).backward()
+            fgm_model.restore()
+            loss_adv_value = loss_adv.item()
+
+        scaler.step(optimizer)
+        scaler.update()
 
         batch_size = batch.num_graphs
         train_num += batch_size
         epoch_loss += loss.item() * batch_size
-        epoch_loss_adv += loss_adv.item() * batch_size
+        epoch_loss_adv += loss_adv_value * batch_size
 
         with torch.no_grad():
             preds.append(torch.sigmoid(out).detach().cpu().numpy())
@@ -104,7 +146,7 @@ def _adversarial_training(model, loader, device, optimizer, loss_fn, fgm_model):
     labels_arr = np.concatenate(labels)
     metrics = compute_classification_metrics(labels_arr, preds_arr)
 
-    return epoch_loss / train_num, epoch_loss_adv / train_num, metrics
+    return epoch_loss / train_num, epoch_loss_adv / max(train_num, 1), metrics, enable_adversarial
 
 
 def _predict_with_loss(loader, model, device, loss_fn):
@@ -118,11 +160,12 @@ def _predict_with_loss(loader, model, device, loss_fn):
         for batch in loader:
             batch = batch.to(device)
             batch_y = batch.y.view(-1).float()
-            output = model(batch).view(-1)
-            loss = loss_fn(output, batch_y)
+            logits = model(batch).view(-1)
+            loss = loss_fn(logits, batch_y)
             total_loss += loss.item() * batch.num_graphs
             total_samples += batch.num_graphs
-            all_preds.append(output.detach().cpu().numpy())
+            probabilities = torch.sigmoid(logits)
+            all_preds.append(probabilities.detach().cpu().numpy())
             all_labels.append(batch_y.detach().cpu().numpy())
 
     preds_arr = np.concatenate(all_preds)
@@ -140,8 +183,9 @@ def _predict(loader, model, device):
     with torch.no_grad():
         for batch in loader:
             batch = batch.to(device)
-            output = model(batch).view(-1)
-            all_preds.append(output.detach().cpu().numpy())
+            logits = model(batch).view(-1)
+            probabilities = torch.sigmoid(logits)
+            all_preds.append(probabilities.detach().cpu().numpy())
             all_labels.append(batch.y.view(-1).detach().cpu().numpy())
 
     preds_arr = np.concatenate(all_preds)
@@ -226,10 +270,23 @@ def train_fold(
 
     history: Dict[str, Any] = {"epochs": []}
 
+    fgm_helper = fgm_model if config.use_fgm else None
+    adversarial_enabled = bool(config.use_fgm and fgm_helper is not None)
+    fgm_effective = adversarial_enabled
+
     for epoch in range(config.num_epochs):
-        epoch_loss, epoch_loss_adv, train_metrics = _adversarial_training(
-            model, train_loader, device, optimizer, loss_fn, fgm_model
+        epoch_loss, epoch_loss_adv, train_metrics, adversarial_enabled = _adversarial_training(
+            model,
+            train_loader,
+            device,
+            optimizer,
+            loss_fn,
+            fgm_helper,
+            enable_adversarial=adversarial_enabled,
         )
+        fgm_effective = fgm_effective and adversarial_enabled
+        if not adversarial_enabled:
+            epoch_loss_adv = 0.0
         val_metrics, val_loss = _predict_with_loss(valid_loader, model, device, loss_fn)
 
         metrics_dict = {
@@ -268,11 +325,11 @@ def train_fold(
         val_aupr = val_metrics[7]
         if val_aupr > best_val_aupr:
             best_val_aupr = val_aupr
-            _save_checkpoint(model, best_aupr_path, config, fold, model_name)
+            _save_checkpoint(model, best_aupr_path, config, fold, model_name, use_fgm=config.use_fgm and adversarial_enabled)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            _save_checkpoint(model, best_loss_path, config, fold, model_name)
+            _save_checkpoint(model, best_loss_path, config, fold, model_name, use_fgm=config.use_fgm and adversarial_enabled)
 
     best_aupr_model = _load_model(model_name, best_aupr_path, config.drop_prob).to(device)
     best_loss_model = _load_model(model_name, best_loss_path, config.drop_prob).to(device)
@@ -295,6 +352,12 @@ def train_fold(
             "test/best_loss_aupr": test_metrics_loss[7],
         })
         wandb_run.finish()
+
+    if config.use_fgm and not fgm_effective:
+        LOGGER.warning(
+            "Adversarial training (FGM) was disabled automatically after encountering GPU memory pressure. "
+            "Consider lowering 'train_batch_size' or setting 'use_fgm: false' in the config for future runs."
+        )
 
     return TrainSummary(best_aupr_path, best_loss_path, history)
 

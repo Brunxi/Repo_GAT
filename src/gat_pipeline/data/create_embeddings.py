@@ -36,10 +36,12 @@ def generate_embeddings(config: PipelineConfig) -> None:
     trimmed_fastas = _trim_sequences(fastas, config.trim_thresh)
     packages: List[Tuple[str, str, int]] = list(zip(genes, trimmed_fastas, targets))
 
-    model_bundle = load_esm_model()
+    model_bundle_embeddings = load_esm_model(config.esm_model_embeddings)
+    model_bundle_contacts = load_esm_model(config.esm_model_contacts)
 
     for gene_id, sequence, target in tqdm(packages, desc="Embedding sequences"):
-        _, representations, contact_map = embed_sequence(gene_id, sequence, model_bundle)
+        _, representations, _ = embed_sequence(gene_id, sequence, model_bundle_embeddings)
+        _, _, contact_map = embed_sequence(gene_id, sequence, model_bundle_contacts)
         gene_dict = {
             "gene_ensembl": gene_id,
             "feature_representation": representations,

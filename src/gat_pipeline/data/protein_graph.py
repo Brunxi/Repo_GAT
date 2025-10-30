@@ -65,7 +65,7 @@ class ProteinGraphDataset(InMemoryDataset):
         features = raw_data["feature_representation"]
         contact_map = raw_data["cmap"]
         target = raw_data["target"]
-        node_features, edge_index = cmap_to_graph(features, contact_map, ratio=self.ratio)
+        node_features, edge_index, _, _ = cmap_to_graph(features, contact_map, ratio=self.ratio)
         return node_features, edge_index, target
 
 

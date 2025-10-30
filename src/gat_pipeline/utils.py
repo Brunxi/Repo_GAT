@@ -31,8 +31,12 @@ def cmap_to_graph(
     all_features: torch.Tensor | np.ndarray,
     contact_map: torch.Tensor | np.ndarray,
     ratio: float,
-) -> Tuple[torch.Tensor, np.ndarray]:
-    """Convert a contact map into node features and an edge index list."""
+) -> Tuple[torch.Tensor, np.ndarray, np.ndarray, int]:
+    """Convert a contact map into node features and an edge index list.
+
+    Returns the node features, undirected edge index, the mapping from graph nodes
+    to the original sequence indices and the original (pre-filtering) sequence length.
+    """
 
     cmap = contact_map.detach().cpu().numpy() if isinstance(contact_map, torch.Tensor) else np.asarray(contact_map)
     features = all_features.detach().cpu() if isinstance(all_features, torch.Tensor) else torch.tensor(all_features)
@@ -60,8 +64,10 @@ def cmap_to_graph(
         edge_index = np.empty((2, 0), dtype=np.int64)
     else:
         edge_pairs = np.array(graph.edges, dtype=np.int64)
-        edge_index = edge_pairs.T
-    return node_features, edge_index
+        undirected_pairs = np.concatenate((edge_pairs, edge_pairs[:, ::-1]), axis=0)
+        edge_index = undirected_pairs.T
+    original_length = cmap.shape[0]
+    return node_features, edge_index, nonzero_ids, original_length
 
 
 def compute_classification_metrics(
