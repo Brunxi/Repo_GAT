@@ -12,7 +12,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$PWD}"
-CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/configs/fungi.yaml}"
+CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/configs/human.yaml}"
 PATHO_FASTA="${PATHO_FASTA:-}"
 NON_PATHO_FASTA="${NON_PATHO_FASTA:-}"
 

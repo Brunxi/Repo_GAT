@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=gat_training
-#SBATCH --output=logs/train_%j.out
-#SBATCH --error=logs/train_%j.err
+#SBATCH --job-name=gat_training_human
+#SBATCH --output=logs/train_hum%j.out
+#SBATCH --error=logs/train_hum%j.err
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$PWD}"
-CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/configs/fungi.yaml}"
+CONFIG_PATH="${CONFIG_PATH:-$PROJECT_ROOT/configs/human.yaml}"
 MODEL_NAME="${MODEL_NAME:-gat}"
 FOLDS="${FOLDS:-0 1 2 3 4}"
 WANDB_API_KEY="${WANDB_API_KEY:-}"

@@ -15,6 +15,7 @@ from .data import (
 from .explain import run_node_explainer
 from .inference import infer_fasta, infer_sequence
 from .training import train_fold
+from .visualization import plot_attention_and_importance
 
 
 def _load_config(path: Optional[str]) -> PipelineConfig:
@@ -130,6 +131,33 @@ def _explain_nodes(args: argparse.Namespace) -> None:
     )
 
 
+def _plot_attention(args: argparse.Namespace) -> None:
+    config = _load_config(args.config)
+    if args.sequence_file:
+        sequence = Path(args.sequence_file).read_text().strip()
+    else:
+        sequence = args.sequence
+    if not sequence:
+        raise ValueError("Provide --sequence or --sequence-file")
+    line_path, contact_path, contact_alt_path = plot_attention_and_importance(
+        sequence=sequence,
+        protein_name=args.name,
+        checkpoint_path=Path(args.model_checkpoint),
+        config=config,
+        fold_number=args.fold,
+        inference_dir=Path(args.inference_dir),
+        explain_dir=Path(args.explain_dir),
+        output_dir=Path(args.output_dir),
+        top_fraction=args.top_fraction,
+        explainer_steps=args.steps,
+        explainer_epochs=args.epochs,
+        explainer_seed=args.seed,
+    )
+    print(f"Saved line figure to {line_path}")
+    print(f"Saved contact map (teal) to {contact_path}")
+    print(f"Saved contact map (diverging) to {contact_alt_path}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gat-pipeline", description="Utilities for the GAT fungal pipeline")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -186,6 +214,24 @@ def build_parser() -> argparse.ArgumentParser:
     explain_parser.add_argument("--epochs", default=None, type=int)
     explain_parser.add_argument("--seed", default=42, type=int)
     explain_parser.set_defaults(func=_explain_nodes)
+
+    plot_parser = subparsers.add_parser(
+        "plot-attention", help="Generate a dual-panel attention and importance figure for a protein sequence"
+    )
+    plot_parser.add_argument("--config", default="configs/fungi.yaml")
+    plot_parser.add_argument("--sequence", default=None)
+    plot_parser.add_argument("--sequence-file", default=None)
+    plot_parser.add_argument("--name", required=True)
+    plot_parser.add_argument("--model-checkpoint", required=True)
+    plot_parser.add_argument("--fold", default=None, type=int)
+    plot_parser.add_argument("--inference-dir", default="inference_results")
+    plot_parser.add_argument("--explain-dir", default="gnn_results")
+    plot_parser.add_argument("--output-dir", default="graficos")
+    plot_parser.add_argument("--top-fraction", default=0.1, type=float)
+    plot_parser.add_argument("--steps", default=11, type=int)
+    plot_parser.add_argument("--epochs", default=None, type=int)
+    plot_parser.add_argument("--seed", default=42, type=int)
+    plot_parser.set_defaults(func=_plot_attention)
 
     return parser
 

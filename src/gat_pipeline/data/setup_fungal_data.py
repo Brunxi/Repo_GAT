@@ -49,7 +49,7 @@ def convert_fasta_to_bingo_format(
     pathogenesis_df = df[df["Target"] == 1][["GeneSymbol"]]
     non_pathogenesis_df = df[df["Target"] == 0][["GeneSymbol"]]
 
-    pathogenesis_df.to_excel(output_dir / "orig_sample_list" / "Fungi_Essential_Genes.xlsx", index=False)
-    non_pathogenesis_df.to_excel(output_dir / "orig_sample_list" / "Fungi_NonEssential_Genes.xlsx", index=False)
+    pathogenesis_df.to_excel(output_dir / "orig_sample_list" / "human_Essential_Genes.xlsx", index=False)
+    non_pathogenesis_df.to_excel(output_dir / "orig_sample_list" / "human_NonEssential_Genes.xlsx", index=False)
 
     return df
